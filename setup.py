@@ -18,9 +18,10 @@ setup(name='WSGITest',
       include_package_data=True,
       zip_safe=True,
       install_requires=[
-          # -*- Extra requirements: -*-
+        'wsgiref',
+        'WSGIObj',
       ],
-      entry_points="""
-      # -*- Entry points: -*-
-      """,
+      dependency_links=[
+        'http://svn.pythonpaste.org/Paste/WSGIObj/trunk#egg=WSGIObj-dev',
+      ],
       )
