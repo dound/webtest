@@ -24,7 +24,7 @@ import re
 from wsgiobj import Response, Request
 
 from paste import wsgilib
-from wsgiref import validate
+from wsgiref.validate import validator
 
 def tempnam_no_warning(*args):
     """
@@ -53,20 +53,14 @@ class TestApp(object):
     # for py.test
     disabled = True
 
-    def __init__(self, app, namespace=None, relative_to=None,
-                 extra_environ=None, pre_request_hook=None,
-                 post_request_hook=None):
+    def __init__(self, app, relative_to=None,
+                 extra_environ=None):
         """
         Wraps a WSGI application in a more convenient interface for
         testing.
 
         ``app`` may be an application, or a Paste Deploy app
         URI, like ``'config:filename.ini#test'``.
-
-        ``namespace`` is a dictionary that will be written to (if
-        provided).  This can be used with doctest or some other
-        system, and the variable ``res`` will be assigned everytime
-        you make a request (instead of returning the request).
 
         ``relative_to`` is a directory, and filenames used for file
         uploads are calculated relative to this.  Also ``config:``
@@ -75,13 +69,6 @@ class TestApp(object):
         ``extra_environ`` is a dictionary of values that should go
         into the environment for each request.  These can provide a
         communication channel with the application.
-
-        ``pre_request_hook`` is a function to be called prior to
-        making requests (such as ``post`` or ``get``). This function
-        must take one argument (the instance of the TestApp).
-
-        ``post_request_hook`` is a function, similar to
-        ``pre_request_hook``, to be called after requests are made.
         """
         if isinstance(app, (str, unicode)):
             from paste.deploy import loadapp
@@ -89,13 +76,10 @@ class TestApp(object):
             # __file__
             app = loadapp(app, relative_to=relative_to)
         self.app = app
-        self.namespace = namespace
         self.relative_to = relative_to
         if extra_environ is None:
             extra_environ = {}
         self.extra_environ = extra_environ
-        self.pre_request_hook = pre_request_hook
-        self.post_request_hook = post_request_hook
         self.reset()
 
     def reset(self):
@@ -105,9 +89,11 @@ class TestApp(object):
         """
         self.cookies = {}
 
-    def _make_environ(self):
+    def _make_environ(self, extra_environ=None):
         environ = self.extra_environ.copy()
         environ['paste.throw_errors'] = True
+        if extra_environ:
+            environ.update(extra_environ)
         return environ
 
     def get(self, url, params=None, headers=None, extra_environ=None,
@@ -142,8 +128,7 @@ class TestApp(object):
         Returns a `response object
         <class-paste.fixture.TestResponse.html>`_
         """
-        if extra_environ is None:
-            extra_environ = {}
+        environ = self._make_environ(extra_environ)
         # Hide from py.test:
         __tracebackhide__ = True
         if params:
@@ -154,27 +139,23 @@ class TestApp(object):
             else:
                 url += '?'
             url += params
-        environ = self._make_environ()
         url = str(url)
         if '?' in url:
             url, environ['QUERY_STRING'] = url.split('?', 1)
         else:
             environ['QUERY_STRING'] = ''
-        self._set_headers(headers, environ)
-        environ.update(extra_environ)
-        req = TestRequest(url, environ, expect_errors)
-        return self.do_request(req, status=status)
+        req = TestRequest.blank(url, environ)
+        if headers:
+            req.headers.update(headers)
+        return self.do_request(req, status=status,
+                               expect_errors=expect_errors)
 
     def _gen_request(self, method, url, params='', headers=None, extra_environ=None,
              status=None, upload_files=None, expect_errors=False):
         """
         Do a generic request.  
         """
-        if headers is None:
-            headers = {}
-        if extra_environ is None:
-            extra_environ = {}
-        environ = self._make_environ()
+        environ = self._make_environ(extra_environ)
         # @@: Should this be all non-strings?
         if isinstance(params, (list, tuple, dict)):
             params = urllib.urlencode(params)
@@ -190,10 +171,11 @@ class TestApp(object):
         environ['CONTENT_LENGTH'] = str(len(params))
         environ['REQUEST_METHOD'] = method
         environ['wsgi.input'] = StringIO(params)
-        self._set_headers(headers, environ)
-        environ.update(extra_environ)
-        req = TestRequest(url, environ, expect_errors)
-        return self.do_request(req, status=status)
+        req = TestRequest.blank(url, environ)
+        if headers:
+            req.headers.update(headers)
+        return self.do_request(req, status=status,
+                               expect_errors=expect_errors)
 
     def post(self, url, params='', headers=None, extra_environ=None,
              status=None, upload_files=None, expect_errors=False):
@@ -246,24 +228,6 @@ class TestApp(object):
                                  extra_environ=extra_environ,status=status,
                                  upload_files=None, expect_errors=expect_errors)
 
-    
-
-
-    def _set_headers(self, headers, environ):
-        """
-        Turn any headers into environ variables
-        """
-        if not headers:
-            return
-        for header, value in headers.items():
-            if header.lower() == 'content-type':
-                var = 'CONTENT_TYPE'
-            elif header.lower() == 'content-length':
-                var = 'CONTENT_LENGTH'
-            else:
-                var = 'HTTP_%s' % header.replace('-', '_').upper()
-            environ[var] = value
-
     def encode_multipart(self, params, files):
         """
         Encodes a set of parameters (typically a name/value list) and
@@ -312,15 +276,15 @@ class TestApp(object):
                 "you gave: %r"
                 % repr(file_info)[:100])
 
-    def do_request(self, req, status):
+    def do_request(self, req, status, expect_errors):
         """
         Executes the given request (``req``), with the expected
         ``status``.  Generally ``.get()`` and ``.post()`` are used
         instead.
         """
-        if self.pre_request_hook:
-            self.pre_request_hook(self)
         __tracebackhide__ = True
+        errors = StringIO()
+        req.environ['wsgi.errors'] = errors
         if self.cookies:
             c = SimpleCookie()
             for name, value in self.cookies.items():
@@ -328,23 +292,23 @@ class TestApp(object):
             req.environ['HTTP_COOKIE'] = str(c).split(': ', 1)[1]
         req.environ['paste.testing'] = True
         req.environ['paste.testing_variables'] = {}
-        app = lint.middleware(self.app)
+        app = validator(self.app)
         old_stdout = sys.stdout
         out = CaptureStdout(old_stdout)
         try:
             sys.stdout = out
             start_time = time.time()
-            raise_on_wsgi_error = not req.expect_errors
-            raw_res = wsgilib.raw_interactive(
-                app, req.url,
-                raise_on_wsgi_error=raise_on_wsgi_error,
-                **req.environ)
+            res = req.get_response(app)
             end_time = time.time()
         finally:
             sys.stdout = old_stdout
             sys.stderr.write(out.getvalue())
-        res = self._make_response(raw_res, end_time - start_time)
-        res.request = req
+        res.app = app
+        res.test_app = self
+        # We do this to make sure the app_iter is exausted:
+        res.body
+        res.errors = errors.getvalue()
+        total_time = end_time - start_time
         for name, value in req.environ['paste.testing_variables'].items():
             if hasattr(res, name):
                 raise ValueError(
@@ -352,55 +316,44 @@ class TestApp(object):
                     "the response object already has an attribute by that "
                     "name" % name)
             setattr(res, name, value)
-        if self.namespace is not None:
-            self.namespace['res'] = res
-        if not req.expect_errors:
+        if not expect_errors:
             self._check_status(status, res)
             self._check_errors(res)
         res.cookies_set = {}
-        for header in res.all_headers('set-cookie'):
+        for header in res.headers.getall('set-cookie'):
             c = SimpleCookie(header)
             for key, morsel in c.items():
                 self.cookies[key] = morsel.value
                 res.cookies_set[key] = morsel.value
-        if self.post_request_hook:
-            self.post_request_hook(self)
-        if self.namespace is None:
-            # It's annoying to return the response in doctests, as it'll
-            # be printed, so we only return it is we couldn't assign
-            # it anywhere
-            return res
+        return res
 
     def _check_status(self, status, res):
         __tracebackhide__ = True
         if status == '*':
             return
         if isinstance(status, (list, tuple)):
-            if res.status not in status:
+            if res.status_int not in status:
                 raise AppError(
                     "Bad response: %s (not one of %s for %s)\n%s"
-                    % (res.full_status, ', '.join(map(str, status)),
+                    % (res.status, ', '.join(map(str, status)),
                        res.request.url, res.body))
             return
         if status is None:
-            if res.status >= 200 and res.status < 400:
+            if res.status_int >= 200 and res.status_int < 400:
                 return
             raise AppError(
                 "Bad response: %s (not 200 OK or 3xx redirect for %s)\n%s"
-                % (res.full_status, res.request.url,
+                % (res.status, res.request.url,
                    res.body))
-        if status != res.status:
+        if status != res.status_int:
             raise AppError(
-                "Bad response: %s (not %s)" % (res.full_status, status))
+                "Bad response: %s (not %s)" % (res.status, status))
 
     def _check_errors(self, res):
-        if res.errors:
+        errors = res.errors
+        if errors:
             raise AppError(
-                "Application had errors logged:\n%s" % res.errors)
-
-    def _make_response(self, (status, headers, body, errors), total_time):
-        return TestResponse(self, status, headers, body, errors,
-                            total_time)
+                "Application had errors logged:\n%s" % errors)
 
 class CaptureStdout(object):
 
@@ -429,16 +382,8 @@ class TestResponse(Response):
     <class-paste.fixture.TestApp.html>`_
     """
 
-    def __init__(self, status, headerlist, body=None, app_iter=None,
-                 test_app=None, request=None, errors=None, total_time=None):
-        super(TestResponse, self).__init__(
-            status=status, headerlist=headerlist,
-            body=body, app_iter=app_iter)
-        self.test_app = test_app
-        self.request = request
-        self.errors = errors
-        self.total_time = total_time
-        self._forms_indexed = None
+    _forms_indexed = None
+
 
     def forms__get(self):
         """
@@ -508,10 +453,10 @@ class TestResponse(Response):
         is an error if this is not a redirect response.  Returns
         another response object.
         """
-        assert self.status >= 300 and self.status < 400, (
+        assert self.status_int >= 300 and self.status_int < 400, (
             "You can only follow redirect responses (not %s)"
-            % self.full_status)
-        location = self.header('location')
+            % self.status)
+        location = self.headers['location']
         type, rest = urllib.splittype(location)
         host, path = urllib.splithost(rest)
         # @@: We should test that it's not a remote redirect
@@ -747,7 +692,7 @@ class TestResponse(Response):
                                  if l.strip()])
         return 'Response: %s\n%s\n%s' % (
             self.status,
-            '\n'.join(['%s: %s' % (n, v) for n, v in self.headers]),
+            '\n'.join(['%s: %s' % (n, v) for n, v in self.headerlist]),
             simple_body)
 
     def showbrowser(self):
@@ -788,10 +733,7 @@ class TestRequest(Request):
         The url/path, with query string.
     """
 
-    def __init__(self, environ, expect_errors=False):
-        super(TestRequest, self).__init__(environ)
-        self.expect_errors = expect_errors
-
+    ResponseClass = TestResponse
 
 ########################################
 ## Form objects
