@@ -19,7 +19,7 @@ def test_testing():
     assert res.content_type == 'text/plain'
     raises(Exception, app.get, '/?error=t')
     raises(wsgitest.AppError, app.get, '/?status=404%20Not%20Found')
-    app.get('/?status=404', status=404)
+    app.get('/?status=404%20Not%20Found', status=404)
     raises(wsgitest.AppError, app.get, '/', status=404)
     res = app.get('/?status=303%20Redirect&header-location=/foo')
     assert res.status_int == 303
