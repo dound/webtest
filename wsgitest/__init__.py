@@ -21,7 +21,7 @@ try:
 except ImportError:
     from StringIO import StringIO
 import re
-from wsgiobj import Response, Request
+from webob import Response, Request
 
 from paste import wsgilib
 from wsgiref.validate import validator

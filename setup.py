@@ -19,9 +19,9 @@ setup(name='WSGITest',
       zip_safe=True,
       install_requires=[
         'wsgiref',
-        'WSGIObj',
+        'WebOb',
       ],
       dependency_links=[
-        'http://svn.pythonpaste.org/Paste/WSGIObj/trunk#egg=WSGIObj-dev',
+        'http://svn.pythonpaste.org/Paste/WebOb/trunk#egg=WebOb-dev',
       ],
       )

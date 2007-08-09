@@ -1,4 +1,4 @@
-from wsgiobj import Request
+from webob import Request
 
 __all__ = ['debug_app']
 
