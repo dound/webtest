@@ -2,171 +2,266 @@ Testing Applications with Paste
 +++++++++++++++++++++++++++++++
 
 :author: Ian Bicking <ianb@colorstudy.com>
-:revision: $Rev$
-:date: $LastChangedDate$
 
 .. contents::
 
-Introduction
-============
+.. comment:
 
-Paste includes functionality for testing your application in a
-convenient manner.  These facilities are quite young, and feedback is
-invited.  Feedback and discussion should take place on the
-`Paste-users list
-<http://pythonpaste.org/mailman/listinfo/paste-users>`_.
+   >>> from dtopt import ELLIPSIS
 
-These facilities let you test your Paste and WSGI-based applications
-easily and without a server. 
+Status & License
+================
 
-.. include:: include/contact.txt
+WSGITest is an extraction of ``paste.fixture.TestApp``, rewriting
+portions to use `WebOb <http://pythonpaste.org/webob/>`_.  It is under
+active development as part of the Paste cloud of packages.
 
-The Test Environment
-====================
+Feedback and discussion should take place on the `Paste list
+<http://pythonpaste.org/community/>`_, and bugs should go into the
+`Paste Trac instance <http://trac.pythonpaste.org>`_.
 
-This has been written with `py.test
-<http://codespeak.net/py/current/doc/test.html>`_ in mind.  The
-py.test convention is to put tests in modules named ``test_*.py``, and
-the actual test functions are also named starting with ``test_``.
+This library is licensed under an `MIT-style license <license.html>`_.
 
-In your testing module you should do::
+What This Does
+==============
 
-    from paste.tests.fixture import setup_module
+WSGITest helps you test your WSGI-based web applications.  This can be
+any application that has a WSGI interface, including an application
+written in a framework that supports WSGI (which includes most
+actively developed Python web frameworks -- almost anything that even
+nominally supports WSGI should be testable).
 
-This will add some initialization, will load your configure, will call
-a ``reset_state`` function if you define one, and will insert the
-variables ``app`` and ``CONFIG`` in your module.
+With this you can test your web applications without starting an HTTP
+server, and without poking into the web framework shortcutting
+pieces of your application that need to be tested.  The tests WSGITest
+runs are entirely equivalent to how a WSGI HTTP server would call an
+application.  By testing the full stack of your application, the
+WSGITest testing model is sometimes called a *functional test*,
+*integration test*, or *acceptance test* (though the latter two are
+not particularly good descriptions).  This is in contrast to a *unit
+test* which tests a particular piece of functionality in your
+application.  While complex programming tasks are often is suited to
+unit tests, template logic and simple web programming is often best
+done with functional tests; and regardless of the presence of unit
+tests, no testing strategy is complete without high-level tests to
+ensure the entire programming system works together.
 
-If you have path problems you can set ``$PYTHONPATH``, or you can add
-something to a ``conftest.py`` module, like::
+WSGITest helps you create tests by providing a convenient interface to
+run WSGI applications and verify the output.
 
-    import sys
-    sys.path.append('path/to/Paste', ...)
+TestApp
+=======
 
-Note that paths given in the ``sys_path`` configuration item will also
-be loaded (but Paste itself must be found first).
+The most important object in WSGITest is ``wsgitest.TestApp``, the
+wrapper for WSGI applications.  To use it, you simply instantiate it
+with your WSGI application.  (Note: if your WSGI application requires
+any configuration, you must set that up manually in your tests.)
 
-The Tests Themselves
-====================
+.. code-block::
 
-The ``app`` object is a wrapper around your application, with many
-methods to make testing convenient.  Here's an example test script::
+    >>> from wsgitest import TestApp
+    >>> from webob import Request, Response
+    >>> from paste.urlmap import URLMap
+    >>> map_app = URLMap()
+    >>> form_html = map_app['/form.html'] = Response(content_type='text/html')
+    >>> form_html.body = '''<html><body>
+    ... <form action="/form-submit" method="POST">
+    ...   <input type="text" name="name">
+    ...   <input type="submit" name="submit" value="Submit!">
+    ... </form></body></html>'''
+    >>> app = TestApp(map_app)
+    >>> res = app.get('/form.html')
+    >>> res.status
+    '200 OK'
+    >>> res.form
+    <wsgitest.Form object at ...>
 
-    def test_myapp():
-        res = app.get('/view', params={'id': 10})
-        # We just got /view?id=10
-        res.mustcontain('Item 10')
-        res = app.post('/view', params={'id': 10, 'name': 'New item
-            name'})
-        # The app does POST-and-redirect...
-        res = res.follow()
-        assert res.request.url == '/view?id=10'
-        res.mustcontain('New item name')
-        res.mustcontain('Item updated')
+Making Requests
+---------------
 
-The methods of the ``app`` object (a ``paste.tests.fixture.TestApp``
-object):
+To make a request, use:
 
-``get(url, params={}, headers={}, status=None)``:
-    Gets the URL.  URLs are based in the root of your application; no
-    domains are allowed.  Parameters can be given as a dictionary, or
-    included directly in the ``url``.  Headers can also be added.
+.. code-block::
 
-    This tests that the status is a ``200 OK`` or a redirect header,
-    unless you pass in a ``status``.  A status of ``"*"`` will never
-    fail; or you can assert a specific status (like ``500``).
+    app.get('/path', [headers], [extra_environ], ...)
 
-    Also, if any errors are written to the error stream this will
-    raise an error.
+This does a request for ``/path``, with any extra headers or WSGI
+environment keys that you indicate.  This returns a response object,
+based on `webob.Response <http://pythonpaste.org/webob/#response>`_.
+It has some additional methods to make it easier to test.
 
-``post(url, params={}, headers={}, status=None, upload_files=())``:
-    POSTS to the URL.  Like GET, except also allows for uploading
-    files.  The uploaded files are a list of ``(field_name, filename,
-    file_content)``.  
+If you want to do a POST request, use:
 
-    If you don't want to do a urlencoded post body, you can put a
-    ``content-type`` header in your header, and pass the body in as a
-    string with ``params``.
+.. code-block::
 
-The response object:
+    app.post('/path', {'vars': 'values'}, [headers], [extra_environ],
+             [upload_files], ...)
 
-``header(header_name, [default])``:
-    Returns the named header.  It's an error if there is more than one
-    matching header.  If you don't provide a default, it is an error
-    if there is no matching header.
+Specifically the second argument is the *body* of the request.  You
+can pass in a dictionary (or dictionary-like object), or a string
+body (dictionary objects are turned into HTML form submissions).
 
-``all_headers(header_name):``
-    Returns a list of all matching headers.
+You can also pass in the keyword argument upload_files, which is a
+list of ``[(fieldname, filename, fild_content)]``.  File uploads use a
+different form submission data type to pass the structured data.
 
-``follow(**kw)``:
+For other verbs you can use:
+
+    app.put(path, params, ...)
+    app.delete(path, ...)
+
+These do PUT and DELETE requests.
+
+
+Modifying the Environment & Simulating Authentication
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The best way to simulate authentication is if your application looks
+in ``environ['REMOTE_USER']`` to see if someone is authenticated.
+Then you can simply set that value, like:
+
+.. code-block::
+
+    app.get('/secret', extra_environ=dict(REMOTE_USER='bob'))
+
+If you want *all* your requests to have this key, do:
+
+.. code-block::
+
+    app = TestApp(my_app, extra_environ=dict(REMOTE_USER='bob'))
+
+What Is Tested By Default
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A key concept behind WSGITest is that there's lots of things you
+shouldn't have to check everytime you do a request.  It is assumed
+that the response will either be a 2xx or 3xx response; if it isn't an
+exception will be raised (you can override this for a request, of
+course).  The WSGI application is tested for WSGI compliance with
+`wsgiref.validate
+<http://python.org/doc/current/lib/module-wsgiref.validate.html>`_
+automatically.  Also it checks that nothing is printed to the
+``environ['wsgi.errors']`` error stream, which typically indicates a
+problem (one that would be non-fatal in a production situation, but if
+you are testing is something you should avoid).
+
+To indicate another status is expected, use the keyword argument
+``status=404`` to (for example) check that it is a 404 status, or
+``status="*"`` to allow any status.
+
+If you expect errors to be printed, use ``expect_errors=True``.
+
+The Response Object
+-------------------
+
+The response object is based on `webob.Response
+<http://pythonpaste.org/webob/#response>`_ with some additions to help
+with testing.
+
+The inherited attributes that are most interesting:
+
+``response.status``:
+    The text status of the response, e.g., ``"200 OK"``.
+
+``response.headers``:
+    A dictionary-like object of the headers in the response.
+
+``response.body``:
+    The text body of the response.
+
+``response.request``:
+    The `webob.Request object
+    <http://pythonpaste.org/webob/#request>`_ used to generate this
+    response.
+
+The added methods:
+
+``response.follow(**kw)``:
     Follows the redirect, returning the new response.  It is an error
     if this response wasn't a redirect.  Any keyword arguments are
     passed to ``app.get`` (e.g., ``status``).
 
-``x in res``:
-    Returns True if the string is found in the response.  Whitespace
-    is normalized for this test.
+``x in response``:
+    Returns True if the string is found in the response body.
+    Whitespace is normalized for this test.
 
-``mustcontain(*strings)``:
+``response.mustcontain(string1, string2, ...)``:
     Raises an error if any of the strings are not found in the
-    response.
+    response.  It also prints out the response in that case, so
+    you can see the real response.
 
-``showbrowser()``:
+``response.showbrowser()``:
     Opens the HTML response in a browser; useful for debugging.
 
-``str(res)``:
-    Gives a slightly-compacted version of the response.
+``str(response)``:
+    Gives a slightly-compacted version of the response.  This is
+    compacted to remove newlines, making it easier to use with
+    `doctest <http://python.org/doc/current/lib/module-doctest.html>`_
 
-``click(description=None, linkid=None, href=None, anchor=None, index=None, verbose=False)``: 
+``response.click(description=None, linkid=None, href=None, anchor=None, index=None, verbose=False)``: 
     Clicks the described link (`see docstring for more
-    <./class-paste.fixture.TestResponse.html#click>`_)
+    <./class-wsgitest.TestResponse.html#click>`_)
 
-``forms``:
+``response.forms``:
     Return a dictionary of forms; you can use both indexes (refer to
     the forms in order) or the string ids of forms (if you've given
     them ids) to identify the form.  See `Form Submissions <#form-submissions>`_ for
     more on the form objects.
 
-Request objects:
-
-``url``:
-    The url requested.
-
-``environ``:
-    The environment used for the request.
-
-``full_url``:
-    The url with query string.
+``response.form``:
+    If there is just a single form, this returns that.  It is an error
+    if you use this and there are multiple forms.
 
 Form Submissions
 ================
 
 You can fill out and submit forms from your tests.  First you get the
-form::
+form:
 
-    res = testapp.get('/entry_form')
-    form = res.forms[0]
+.. code-block::
 
-Then you fill it in fields::
+    >>> res = app.get('/form.html')
+    >>> form = res.form
 
-    # when there's one unambiguous name field:
-    form['name'] = 'Bob'
-    # Enter something into the first field named 'age'
-    form.set('age', '45', index=1)
+Then you fill it in fields:
 
-Finally you submit::
+.. code-block::
 
-    # Submit with no particular submit button pressed:
-    form.submit()
-    # Or submit a button:
-    form.submit('submit_button_name')
+    >>> form.action
+    '/form-submit'
+    >>> form.method
+    'POST'
+    >>> form.fields
+    {'name': [<wsgitest.Text object at ...>], 'submit': [<wsgitest.Submit object at ...>]}
+    >>> form['name'] = 'Bob'
+    >>> # When names don't point to a single field:
+    >>> form.set('name', 'Bob', index=0)
+
+Then you can submit.  First we'll put up a simple test app to catch
+the response:
+
+.. code-block::
+
+    >>> from wsgitest.debugapp import debug_app
+    >>> map_app['/form-submit'] = debug_app
+    >>> # Submit with no particular submit button pressed:
+    >>> res = form.submit()
+    >>> # Or submit a button:
+    >>> res = form.submit('submit')
+    >>> print res
+    Response: 200 OK
+    Content-Type: text/plain
+    ...
+    -- Body ----------
+    submit=Submit%21&name=Bob
 
 Framework Hooks
 ===============
 
 Frameworks can detect that they are in a testing environment by the
 presence (and truth) of the WSGI environmental variable
-``"paste.testing"``.
+``"paste.testing"`` (the key name is inherited from
+``paste.fixture``).
 
 More generally, frameworks can detect that something (possibly a test
 fixture) is ready to catch unexpected errors by the presence and truth
