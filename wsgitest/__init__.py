@@ -22,9 +22,9 @@ except ImportError:
     from StringIO import StringIO
 import re
 from webob import Response, Request
-
-from paste import wsgilib
 from wsgiref.validate import validator
+
+__all__ = ['TestApp']
 
 def tempnam_no_warning(*args):
     """
@@ -53,8 +53,7 @@ class TestApp(object):
     # for py.test
     disabled = True
 
-    def __init__(self, app, relative_to=None,
-                 extra_environ=None):
+    def __init__(self, app, extra_environ=None, relative_to=None):
         """
         Wraps a WSGI application in a more convenient interface for
         testing.
@@ -62,13 +61,13 @@ class TestApp(object):
         ``app`` may be an application, or a Paste Deploy app
         URI, like ``'config:filename.ini#test'``.
 
-        ``relative_to`` is a directory, and filenames used for file
-        uploads are calculated relative to this.  Also ``config:``
-        URIs that aren't absolute.
-
         ``extra_environ`` is a dictionary of values that should go
         into the environment for each request.  These can provide a
         communication channel with the application.
+
+        ``relative_to`` is a directory, and filenames used for file
+        uploads are calculated relative to this.  Also ``config:``
+        URIs that aren't absolute.
         """
         if isinstance(app, (str, unicode)):
             from paste.deploy import loadapp
@@ -125,8 +124,7 @@ class TestApp(object):
             ``wsgi.errors`` it will be an error.  If it is true, then
             non-200/3xx responses are also okay.
 
-        Returns a `response object
-        <class-paste.fixture.TestResponse.html>`_
+        Returns a ``webob.Response`` object.
         """
         environ = self._make_environ(extra_environ)
         # Hide from py.test:
@@ -188,8 +186,7 @@ class TestApp(object):
         just ``[(fieldname, filename)]`` and the file content will be
         read from disk.
 
-        Returns a `response object
-        <class-paste.fixture.TestResponse.html>`_
+        Returns a ``webob.Response`` object.
         """
         return self._gen_request('POST', url, params=params, headers=headers,
                                  extra_environ=extra_environ,status=status,
@@ -207,22 +204,20 @@ class TestApp(object):
         just ``[(fieldname, filename)]`` and the file content will be
         read from disk.
 
-        Returns a `response object
-        <class-paste.fixture.TestResponse.html>`_
+        Returns a ``webob.Response`` object.
         """
         return self._gen_request('PUT', url, params=params, headers=headers,
                                  extra_environ=extra_environ,status=status,
                                  upload_files=upload_files,
                                  expect_errors=expect_errors)
 
-    def delete(self, url, params='', headers=None, extra_environ=None,
+    def delete(self, url, headers=None, extra_environ=None,
                status=None, expect_errors=False):
         """
         Do a DELETE request.  Very like the ``.get()`` method.
         ``params`` are put in the body of the request.
 
-        Returns a `response object
-        <class-paste.fixture.TestResponse.html>`_
+        Returns a ``webob.Response`` object.
         """
         return self._gen_request('DELETE', url, params=params, headers=headers,
                                  extra_environ=extra_environ,status=status,
@@ -378,8 +373,7 @@ class CaptureStdout(object):
 class TestResponse(Response):
 
     """
-    Instances of this class are return by `TestApp
-    <class-paste.fixture.TestApp.html>`_
+    Instances of this class are return by ``TestApp``
     """
 
     _forms_indexed = None
@@ -397,7 +391,7 @@ class TestResponse(Response):
     forms = property(forms__get,
                      doc="""
                      A list of <form>s found on the page (instances of
-                     `Form <class-paste.fixture.Form.html>`_)
+                     ``Form``)
                      """)
 
     def form__get(self):
@@ -413,8 +407,7 @@ class TestResponse(Response):
 
     form = property(form__get,
                     doc="""
-                    Returns a single `Form
-                    <class-paste.fixture.Form.html>`_ instance; it
+                    Returns a single ``Form`` instance; it
                     is an error if there are multiple forms on the
                     page.
                     """)
@@ -620,7 +613,7 @@ class TestResponse(Response):
         # We
         scheme = host = fragment = ''
         href = urlparse.urlunsplit((scheme, host, path, query, fragment))
-        href = urlparse.urljoin(self.request.full_url, href)
+        href = urlparse.urljoin(self.request.url, href)
         method = method.lower()
         assert method in ('get', 'post'), (
             'Only "get" or "post" are allowed for method (you gave %r)'
@@ -700,7 +693,7 @@ class TestResponse(Response):
         Show this response in a browser window (for debugging purposes,
         when it's hard to read the HTML).
         """
-        fn = tempnam_no_warning(None, 'paste-fixture') + '.html'
+        fn = tempnam_no_warning(None, 'wsgitest-page') + '.html'
         f = open(fn, 'wb')
         f.write(self.body)
         f.close()
@@ -712,26 +705,13 @@ class TestRequest(Request):
     # for py.test
     disabled = True
 
-    """
-    Instances of this class are created by `TestApp
-    <class-paste.fixture.TestApp.html>`_ with the ``.get()`` and
-    ``.post()`` methods, and are consumed there by ``.do_request()``.
+    def blank(cls, path_info, *args, **kw):
+        scheme, netloc, path, query, fragment = urlparse.urlsplit(path_info)
+        path_info = path + query
+        return super(TestRequest, cls).blank(
+            path_info, *args, **kw)
 
-    Instances are also available as a ``.req`` attribute on
-    `TestResponse <class-paste.fixture.TestResponse.html>`_ instances.
-
-    Useful attributes:
-
-    ``url``:
-        The url (actually usually the path) of the request, without
-        query string.
-
-    ``environ``:
-        The environment dictionary used for the request.
-
-    ``full_url``:
-        The url/path, with query string.
-    """
+    blank = classmethod(blank)
 
     ResponseClass = TestResponse
 
