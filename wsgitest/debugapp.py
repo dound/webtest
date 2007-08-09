@@ -12,6 +12,10 @@ def debug_app(environ, start_response):
         if name.upper() != name:
             value = repr(value)
         parts.append('%s: %s\n' % (name, value))
+    req_body = req.read_body()
+    if req_body:
+        parts.append('-- Body ----------\n')
+        parts.append(req_body)
     body = ''.join(parts)
     headers = [
         ('Content-Type', 'text/plain'),
@@ -22,3 +26,10 @@ def debug_app(environ, start_response):
             headers.append((header_name, value))
     start_response(status, headers)
     return [body]
+
+def make_debug_app(global_conf):
+    """
+    An application that displays the request environment, and does
+    nothing else (useful for debugging and test purposes).
+    """
+    return debug_app
